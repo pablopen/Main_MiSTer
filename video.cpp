@@ -1911,6 +1911,16 @@ static int read_edid(bool force = false)
 	if (blocks > max_blocks) blocks = max_blocks;
 	for (uint8_t i = 1; i < blocks; i++) read_edid_segment(i, buf + (i * 256));
 
+	// DEBUG: does the sink's EDID actually change between reads? (RT4K profile
+	// switch hypothesis). Compare the freshly-read buf against the stored edid.
+	{
+		uint32_t sum_new = 0, sum_old = 0;
+		for (size_t i = 0; i < sizeof(edid); i++) { sum_new += buf[i]; sum_old += edid[i]; }
+		bool changed = memcmp(edid, buf, sizeof(edid)) != 0;
+		printf("[HDMI] read_edid: EDID %s (sum old=%08X new=%08X, mfg %02X%02X prod %02X%02X)\n",
+		       changed ? "CHANGED" : "SAME", sum_old, sum_new, buf[8], buf[9], buf[10], buf[11]);
+	}
+
 	memcpy(edid, buf, sizeof(edid));
 
 	printf("EDID:\n");
@@ -2190,6 +2200,7 @@ static void set_vrr_mode()
 	if (!supports_vrr() || cfg.vsync_adjust) use_vrr = 0;
 }
 
+static void dbg_adv_state(const char *tag); // DEBUG: defined near video_init
 static void video_set_mode(vmode_custom_t *v, double Fpix)
 {
 	PROFILE_FUNCTION();
@@ -2294,6 +2305,10 @@ static void video_set_mode(vmode_custom_t *v, double Fpix)
 	video_fb_config();
 
 	setShadowMask();
+
+	// DEBUG: post-mode-set ADV7513 state - fires for EVERY mode change
+	// (boot, reinit, AND core-open), so core-switch black screens are captured.
+	dbg_adv_state("video_set_mode/done");
 }
 
 static int parse_custom_video_mode(char* vcfg, vmode_custom_t *v)
@@ -2682,8 +2697,20 @@ void video_cfg_reset()
 	setShadowMask();
 }
 
+// DEBUG: dump ADV7513 link/power/interrupt state with a tag.
+static void dbg_adv_state(const char *tag)
+{
+	if (hdmi_main_fd < 0) { printf("[HDMI] %s: hdmi_main_fd<0\n", tag); return; }
+	int st42 = i2c_smbus_read_byte_data(hdmi_main_fd, 0x42);
+	int r41  = i2c_smbus_read_byte_data(hdmi_main_fd, 0x41);
+	int s96  = i2c_smbus_read_byte_data(hdmi_main_fd, 0x96);
+	printf("[HDMI] %s: 0x42=%02X (HPD=%d MS=%d) 0x41=%02X (powered=%d) 0x96=%02X\n",
+	       tag, st42, (st42 >> 6) & 1, (st42 >> 5) & 1, r41, !((r41 >> 6) & 1), s96);
+}
+
 void video_init()
 {
+	printf("[HDMI] video_init: ENTER\n");
 	yc_parse(yc_modes, sizeof(yc_modes) / sizeof(yc_modes[0]));
 
 	fb_init();
@@ -2712,13 +2739,21 @@ void video_init()
 
 	video_cfg_init();
 
+	printf("[HDMI] video_init: before video_set_mode\n");
 	video_set_mode(&v_def, 0);
+	printf("[HDMI] video_init: after video_set_mode\n");
+	dbg_adv_state("video_init/done");
 }
 
 void video_reinit()
 {
+	printf("[HDMI] video_reinit: ENTER (edid_version=%d, hdmi_main_fd=%d)\n", edid_version, hdmi_main_fd);
+	dbg_adv_state("reinit/pre");
+
 	int prev_ver = edid_version;
 	read_edid(true);
+	printf("[HDMI] video_reinit: read_edid done (version %d->%d, valid=%d)\n",
+	       prev_ver, edid_version, is_edid_valid());
 
 	// re-read gave nothing new but a valid EDID is still held: the mode is unchanged,
 	// so don't bounce a working link (some clones can't re-lock mid-operation)
@@ -2731,16 +2766,33 @@ void video_reinit()
 	printf("*** Video re-initialization.\n");
 
 	hdmi_config_init();
+	dbg_adv_state("reinit/after hdmi_config_init");
 	hdmi_config_set_hdr();
 
 	support_FHD = 0;
 	video_mode_load(true);
+	printf("[HDMI] video_reinit: after video_mode_load\n");
 
 	video_cfg_init();
+	printf("[HDMI] video_reinit: before video_set_mode\n");
 	video_set_mode(&v_def, 0);
+	printf("[HDMI] video_reinit: after video_set_mode\n");
+	dbg_adv_state("reinit/after video_set_mode");
+
 	user_io_send_buttons(1);
+	printf("[HDMI] video_reinit: after user_io_send_buttons\n");
+
 	video_mode_adjust(1);
+	printf("[HDMI] video_reinit: after video_mode_adjust\n");
+
 	video_menu_bg(-1);
+	printf("[HDMI] video_reinit: after video_menu_bg\n");
+
+	// post-reinit link/power readback (unconditional - prints fd<0 too). If this
+	// shows HPD=1/MS=1 and TX powered but the sink stays black, the defect is
+	// downstream (sink won't re-lock); if HPD/MS dropped, we bounced our own link.
+	dbg_adv_state("reinit/post");
+	printf("[HDMI] video_reinit: DONE\n");
 	return;
 }
 
@@ -2799,6 +2851,16 @@ void video_poll()
 		{
 			int irq_status = i2c_smbus_read_byte_data(hdmi_main_fd, 0x96);
 			if (irq_status < 0) irq_status = 0; // read error: keep the polled paths below alive
+
+			// DEBUG: log the freshly-latched interrupt cause every time the INT
+			// pin fires - the authoritative "what did the sink signal" (cleared
+			// just below). bit7=HPD edge, bit6=MSEN edge, bit2=EDID-ready.
+			{
+				int st42 = i2c_smbus_read_byte_data(hdmi_main_fd, 0x42);
+				printf("[HDMI] INT cause 0x96=%02X (HPD_edge=%d MSEN_edge=%d EDIDrdy=%d) | 0x42=%02X (HPD=%d MS=%d)\n",
+				       irq_status, (irq_status >> 7) & 1, (irq_status >> 6) & 1, (irq_status >> 2) & 1,
+				       st42, (st42 >> 6) & 1, (st42 >> 5) & 1);
+			}
 
 			// Clear everything latched, not just HPD/MS: unmasked bits
 			// (e.g. vsync) latch too and would otherwise hold INT asserted.
@@ -2903,6 +2965,23 @@ void video_poll()
 
 	bool changed = (hpd != hpd_level) || (ms != ms_level);
 	bool was_up = (hpd_level && ms_level);
+
+	// DEBUG: sample-by-sample HPD/MS timeline. Gated so it stays quiet at idle
+	// (the 1 Hz fallback sample has edge=0/changed=0/IDLE) and only fires while
+	// something is actually happening - the toggle pattern/timing is the whole
+	// story for sink-driven loops (RT4K profile change, capture cards).
+	if (edge || changed || hpd_sm_state == HPD_SETTLE)
+	{
+		// read interrupt-cause registers too so we see WHAT the sink signaled
+		// (0x96: bit7 HPD edge, bit6 MSEN edge, bit2 EDID-ready; 0x97: CEC).
+		int s96 = i2c_smbus_read_byte_data(hdmi_main_fd, 0x96);
+		int s97 = i2c_smbus_read_byte_data(hdmi_main_fd, 0x97);
+		printf("[HDMI] sample 0x42=%02X HPD=%d MS=%d edge=%d %s burst=%d edid_valid=%d 0x96=%02X 0x97=%02X\n",
+		       st42, hpd, ms, edge,
+		       hpd_sm_state == HPD_SETTLE ? "SETTLE" : "IDLE",
+		       hpd_reinit_burst, is_edid_valid(), s96, s97);
+	}
+
 	hpd_level = hpd;
 	ms_level = ms;
 	if (!hpd)
@@ -3957,6 +4036,7 @@ extern uint8_t  _binary_logo_png_start[], _binary_logo_png_end[];
 
 void video_menu_bg(int n, int idle)
 {
+	printf("[HDMI] video_menu_bg: ENTER n=%d idle=%d\n", n, idle);
 	static Imlib_Image bg1 = 0, bg2 = 0;
 	static Imlib_Image curtain = 0;
 
@@ -3967,6 +4047,9 @@ void video_menu_bg(int n, int idle)
 	{
 		n = menu_bg;
 		idle = cached_idle;
+
+		printf("[HDMI] video_menu_bg(-1): resolved n=menu_bg=%d idle=%d fb=%dx%d bg1=%p bg2=%p curtain=%p\n",
+		       menu_bg, idle, fb_width, fb_height, (void*)bg1, (void*)bg2, (void*)curtain);
 
 		imlib_context_set_image(bg1); imlib_free_image(); bg1 = 0;
 		imlib_context_set_image(bg2); imlib_free_image(); bg2 = 0;
@@ -4205,7 +4288,9 @@ void video_menu_bg(int n, int idle)
 		//printf("**** BG DEBUG END ****\n");
 	}
 
+	printf("[HDMI] video_menu_bg: drawing done (n=%d bg_has_picture=%d), calling video_fb_enable(0)\n", n, bg_has_picture);
 	video_fb_enable(0);
+	printf("[HDMI] video_menu_bg: RETURN\n");
 }
 
 void dbg_draw_cursor(int x, int y)
