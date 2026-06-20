@@ -2708,6 +2708,21 @@ static void dbg_adv_state(const char *tag)
 	       tag, st42, (st42 >> 6) & 1, (st42 >> 5) & 1, r41, !((r41 >> 6) & 1), s96);
 }
 
+// DEBUG: full ADV7513 register dump (0x00-0xFF) so a step-by-step diff reveals
+// exactly which reinit call blanks the data path (TMDS/PLL, packets/AVMUTE, CSC).
+static void dbg_adv_dump(const char *tag)
+{
+	if (hdmi_main_fd < 0) { printf("[HDMI] dump %s: hdmi_main_fd<0\n", tag); return; }
+	for (int b = 0x00; b <= 0xF0; b += 0x10)
+	{
+		char line[160];
+		int p = sprintf(line, "[HDMI] dump %s %02X:", tag, b);
+		for (int i = 0; i < 16; i++)
+			p += sprintf(line + p, " %02X", i2c_smbus_read_byte_data(hdmi_main_fd, b + i) & 0xFF);
+		printf("%s\n", line);
+	}
+}
+
 void video_init()
 {
 	printf("[HDMI] video_init: ENTER\n");
@@ -2749,6 +2764,7 @@ void video_reinit()
 {
 	printf("[HDMI] video_reinit: ENTER (edid_version=%d, hdmi_main_fd=%d)\n", edid_version, hdmi_main_fd);
 	dbg_adv_state("reinit/pre");
+	dbg_adv_dump("pre");
 
 	int prev_ver = edid_version;
 	read_edid(true);
@@ -2767,6 +2783,7 @@ void video_reinit()
 
 	hdmi_config_init();
 	dbg_adv_state("reinit/after hdmi_config_init");
+	dbg_adv_dump("after_config_init");
 	hdmi_config_set_hdr();
 
 	support_FHD = 0;
@@ -2778,6 +2795,7 @@ void video_reinit()
 	video_set_mode(&v_def, 0);
 	printf("[HDMI] video_reinit: after video_set_mode\n");
 	dbg_adv_state("reinit/after video_set_mode");
+	dbg_adv_dump("after_set_mode");
 
 	user_io_send_buttons(1);
 	printf("[HDMI] video_reinit: after user_io_send_buttons\n");
@@ -2792,6 +2810,7 @@ void video_reinit()
 	// shows HPD=1/MS=1 and TX powered but the sink stays black, the defect is
 	// downstream (sink won't re-lock); if HPD/MS dropped, we bounced our own link.
 	dbg_adv_state("reinit/post");
+	dbg_adv_dump("post");
 	printf("[HDMI] video_reinit: DONE\n");
 	return;
 }
@@ -2933,6 +2952,10 @@ void video_poll()
 			int irq_status = i2c_smbus_read_byte_data(hdmi_main_fd, 0x96);
 			if (irq_status > 0)
 			{
+				int st42 = i2c_smbus_read_byte_data(hdmi_main_fd, 0x42);
+				printf("[HDMI] INT cause (polled) 0x96=%02X (HPD_edge=%d MSEN_edge=%d EDIDrdy=%d) | 0x42=%02X (HPD=%d MS=%d)\n",
+				       irq_status, (irq_status >> 7) & 1, (irq_status >> 6) & 1, (irq_status >> 2) & 1,
+				       st42, (st42 >> 6) & 1, (st42 >> 5) & 1);
 				i2c_smbus_write_byte_data(hdmi_main_fd, 0x96, irq_status);
 				if (irq_status & 0xC0) hpd_edge_pending = true;
 			}
@@ -2970,10 +2993,8 @@ void video_poll()
 	// (the 1 Hz fallback sample has edge=0/changed=0/IDLE) and only fires while
 	// something is actually happening - the toggle pattern/timing is the whole
 	// story for sink-driven loops (RT4K profile change, capture cards).
-	if (edge || changed || hpd_sm_state == HPD_SETTLE)
+	// log EVERY sample (no gating) so no state transition is hidden
 	{
-		// read interrupt-cause registers too so we see WHAT the sink signaled
-		// (0x96: bit7 HPD edge, bit6 MSEN edge, bit2 EDID-ready; 0x97: CEC).
 		int s96 = i2c_smbus_read_byte_data(hdmi_main_fd, 0x96);
 		int s97 = i2c_smbus_read_byte_data(hdmi_main_fd, 0x97);
 		printf("[HDMI] sample 0x42=%02X HPD=%d MS=%d edge=%d %s burst=%d edid_valid=%d 0x96=%02X 0x97=%02X\n",
