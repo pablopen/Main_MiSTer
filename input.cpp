@@ -1487,6 +1487,10 @@ typedef struct
 	int      lastx, lasty;
 	int      quirk;
 
+	const input_adapter *adapter;
+	const void *adapter_dev;
+	uint32_t adapter_state;
+
 	int      misc_flags;
 	int      paddle_val;
 	int      spinner_prev;
@@ -1534,6 +1538,9 @@ typedef struct
 } devInput;
 
 static devInput input[NUMDEV] = {};
+// slots with a matched input adapter; rebuilt on every device rescan
+static int adapter_dev_idx[NUMDEV];
+static int adapter_devs = 0;
 static devInput player_pad[NUMPLAYERS] = {};
 static devInput player_pdsp[NUMPLAYERS] = {};
 
@@ -1931,6 +1938,16 @@ int input_has_lightgun()
 		if (input[i].quirk == QUIRK_LIGHTGUN) return 1;
 		if (input[i].quirk == QUIRK_LIGHTGUN_CRT) return 1;
 		if (input[i].quirk == QUIRK_LIGHTGUN_MOUSE) return 1;
+	}
+	return 0;
+}
+
+int input_adapter_connected(const input_adapter *a)
+{
+	if (!adapter_devs) return 0;
+	for (int i = 0; i < NUMDEV; i++)
+	{
+		if (input[i].adapter == a) return 1;
 	}
 	return 0;
 }
@@ -3898,6 +3915,13 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 
 		//analog joystick
 		case EV_ABS:
+			// before the OSD gate and dedup: the adapter must never miss a raw axis change
+			if (input[dev].adapter && input_adapter_active(input[dev].adapter)
+				&& input[dev].adapter->on_event(input[dev].adapter_dev, ev->type, ev->code & 0xFF, ev->value, &input[dev].adapter_state))
+			{
+				break;
+			}
+
 			if (!user_io_osd_is_visible())
 			{
 				int value = ev->value;
@@ -5166,6 +5190,7 @@ int input_test(int getchar)
 		}
 
 		memset(input, 0, sizeof(input));
+		adapter_devs = 0;
 
 		int n = 0;
 		DIR *d = opendir("/dev/input");
@@ -5262,6 +5287,9 @@ int input_test(int getchar)
 							input[n].guncal[3] = 14337;
 							input_lightgun_load(n);
 						}
+
+						input[n].adapter = input_adapter_match(input[n].vid, input[n].pid, &input[n].adapter_dev);
+					if (input[n].adapter) adapter_dev_idx[adapter_devs++] = n;
 
 						if (input[n].vid == 0x054c)
 						{
@@ -5558,6 +5586,13 @@ int input_test(int getchar)
 				setup_deadzone(&ev, i);
 			}
 			unflag_players();
+
+			// adapters enabled from ini need their core setup without a menu visit
+			for (int k = 0; k < adapter_devs; k++)
+			{
+				const input_adapter *a = input[adapter_dev_idx[k]].adapter;
+				if (input_adapter_active(a) && a->prepare) a->prepare();
+			}
 		}
 		cur_leds |= 0x80;
 		state++;
@@ -6374,6 +6409,18 @@ int input_poll(int getchar)
 
 	if (grabbed)
 	{
+		if (adapter_devs && !user_io_osd_is_visible())
+		{
+			for (int k = 0; k < adapter_devs; k++)
+			{
+				int d = adapter_dev_idx[k];
+				if (input[d].num && input[d].num <= NUMPLAYERS && input_adapter_active(input[d].adapter))
+				{
+					input[d].adapter->apply(input[d].adapter_dev, &input[d].adapter_state, &joy_mask[input[d].num - 1]);
+				}
+			}
+		}
+
 		for (int i = 0; i < NUMPLAYERS; i++) {
 			joy_mask[i] = joy_mask[i] | autofire_mask[i];
 			int newdir = (joy_mask[i] & 0xF) | (joy_mask_prev[i] & 0xF);
@@ -6389,7 +6436,12 @@ int input_poll(int getchar)
 	{
 		for (int i = 0; i < NUMPLAYERS; i++)
 		{
-			if(joy_mask[i]) user_io_digital_joystick(i, 0, 1);
+			// zero prev too, so the change-detector above re-sends held masks (adapters) on OSD close
+			if (joy_mask_prev[i])
+			{
+				joy_mask_prev[i] = 0;
+				user_io_digital_joystick(i, 0, 1);
+			}
 		}
 		memset(key_states, 0, sizeof(key_states));
 	}

@@ -70,3 +70,6 @@
 
 // 3DO  support
 #include "support/3do/3do.h"
+
+// Software input adapters (translate unusual USB controllers for cores)
+#include "support/input_adapter/input_adapter.h"

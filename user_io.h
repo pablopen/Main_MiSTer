@@ -185,6 +185,8 @@ uint32_t user_io_status_mask(const char *opt);
 uint32_t user_io_hd_mask(const char *opt);
 uint32_t user_io_status_get(const char *opt, int ex = 0);
 void user_io_status_set(const char *opt, uint32_t value, int ex = 0);
+char *user_io_conf_skip_hd(char *p, uint32_t hdmask, int *h, int *d);
+int user_io_set_option_by_name(const char *opt_label, const char *choice_text);
 int user_io_status_save(const char *filename);
 void user_io_status_reset();
 

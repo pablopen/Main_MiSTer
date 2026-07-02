@@ -825,6 +825,66 @@ static void MenuWrite(unsigned char n, const char *s = "", unsigned char invert 
 	OsdWriteOffset(row, s, invert, stipple, 0, (row == 0 && firstmenu) ? 17 : (row == (OsdGetSize()-1) && !arrow) ? 16 : 0, 0);
 }
 
+// System-menu ids free for adapter rows (the base System menu leaves 7/8/11/12 unused).
+static const uint8_t adapter_menusub[] = { 7, 8, 11, 12 };
+
+// Nth connected+supported adapter, or NULL.
+static const input_adapter *adapter_for_slot(int slot)
+{
+	int count;
+	const input_adapter *const *list = input_adapter_all(&count);
+	for (int i = 0; i < count; i++)
+	{
+		if (!input_adapter_connected(list[i]) || !list[i]->supported()) continue;
+		if (!slot--) return list[i];
+	}
+	return NULL;
+}
+
+static void adapted_controllers_menu(int &n)
+{
+	for (int slot = 0; slot < (int)sizeof(adapter_menusub); slot++)
+	{
+		const input_adapter *a = adapter_for_slot(slot);
+		if (!a) break;
+
+		menumask |= (1 << adapter_menusub[slot]);
+		MenuWrite(n++);
+		char s[32];
+		snprintf(s, sizeof(s), " %s - %s", a->name, (a->enable && *a->enable) ? "On" : "Off");
+		MenuWrite(n++, s, menusub == (uint32_t)adapter_menusub[slot]);
+	}
+}
+
+static int adapted_controllers_select()
+{
+	for (int slot = 0; slot < (int)sizeof(adapter_menusub); slot++)
+	{
+		if (menusub != (uint32_t)adapter_menusub[slot]) continue;
+
+		const input_adapter *a = adapter_for_slot(slot);
+		if (!a) return 0;
+
+		if (a->enable) *a->enable = !*a->enable;
+		if (a->enable && *a->enable && a->prepare) a->prepare();   // turning on -> configure core
+		return 1;
+	}
+	return 0;
+}
+
+// Shows, on the Define-buttons screen, that the device being mapped is a recognised adapter.
+static void adapted_controllers_map_info(int row)
+{
+	const void *dev;
+	const input_adapter *a = input_adapter_match(get_map_vid(), get_map_pid(), &dev);
+	if (a)
+	{
+		char s[32];
+		snprintf(s, sizeof(s), "   %s", a->name);
+		OsdWrite(row, s);
+	}
+}
+
 const char* get_rbf_name_bootcore(char *str)
 {
 	if (!strlen(cfg.bootcore)) return "";
@@ -1935,15 +1995,7 @@ void HandleUI(void)
 					else
 					{
 						//Hide or Disable flag (small letter - opposite action)
-						while ((p[0] == 'H' || p[0] == 'D' || p[0] == 'h' || p[0] == 'd') && strlen(p) > 2)
-						{
-							int flg = (hdmask & (1 << user_io_hd_mask(p + 1))) ? 1 : 0;
-							if (p[0] == 'H') h |= flg;
-							if (p[0] == 'h') h |= (flg ^ 1);
-							if (p[0] == 'D') d |= flg;
-							if (p[0] == 'd') d |= (flg ^ 1);
-							p += 2;
-						}
+						p = user_io_conf_skip_hd(p, hdmask, &h, &d);
 
 						if (p[0] == 'P')
 						{
@@ -2325,15 +2377,7 @@ void HandleUI(void)
 					else if (strncmp(p, "DEFMRA,", 7))
 					{
 						//Hide or Disable flag
-						while ((p[0] == 'H' || p[0] == 'D' || p[0] == 'h' || p[0] == 'd') && strlen(p) > 2)
-						{
-							int flg = (hdmask & (1 << user_io_hd_mask(p + 1))) ? 1 : 0;
-							if (p[0] == 'H') h |= flg;
-							if (p[0] == 'h') h |= (flg ^ 1);
-							if (p[0] == 'D') d |= flg;
-							if (p[0] == 'd') d |= (flg ^ 1);
-							p += 2;
-						}
+						p = user_io_conf_skip_hd(p, hdmask, &h, &d);
 					}
 
 					if (p[0] == 'P')
@@ -2875,6 +2919,8 @@ void HandleUI(void)
 				MenuWrite(n++);
 				MenuWrite(n++, " Video processing          \x16", menusub==6);
 
+				adapted_controllers_menu(n);
+
 				if (audio_filter_en() >= 0)
 				{
 					MenuWrite(n++);
@@ -2947,6 +2993,12 @@ void HandleUI(void)
 
 		if (select)
 		{
+			if (adapted_controllers_select())
+			{
+				menustate = MENU_COMMON1;
+				break;
+			}
+
 			switch (menusub)
 			{
 			case 0:
@@ -4322,6 +4374,7 @@ void HandleUI(void)
 						if (!get_map_type()) OsdWrite(9);
 					}
 					OsdWrite(5, s);
+					adapted_controllers_map_info(6);
 					if (!is_menu()) OsdWrite(10, "          F12 \x16 Clear all");
 				}
 			}

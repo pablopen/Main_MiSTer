@@ -576,6 +576,60 @@ void user_io_status_set(const char *opt, uint32_t value, int ex)
 	}
 }
 
+// Skip an option's Hide/Disable prefixes, advancing past them and reporting hide/disable state.
+char *user_io_conf_skip_hd(char *p, uint32_t hdmask, int *h, int *d)
+{
+	int hh = 0, dd = 0;
+	while ((p[0] == 'H' || p[0] == 'D' || p[0] == 'h' || p[0] == 'd') && strlen(p) > 2)
+	{
+		int flg = (hdmask & (1 << user_io_hd_mask(p + 1))) ? 1 : 0;
+		if (p[0] == 'H') hh |= flg;
+		if (p[0] == 'h') hh |= (flg ^ 1);
+		if (p[0] == 'D') dd |= flg;
+		if (p[0] == 'd') dd |= (flg ^ 1);
+		p += 2;
+	}
+	if (h) *h = hh;
+	if (d) *d = dd;
+	return p;
+}
+
+// Set a core option to a named choice, resolving its bit range and choice index from the running core.
+int user_io_set_option_by_name(const char *opt_label, const char *choice_text)
+{
+	char field[256];
+
+	user_io_read_confstr();
+	for (int i = 2; ; i++)   // 0/1 are core name and extensions
+	{
+		char *p = user_io_get_confstr(i);
+		if (!p) break;
+
+		p = user_io_conf_skip_hd(p, 0, 0, 0);
+		if (p[0] == 'P' && p[1] && p[2] != ',') p += 2;   // skip page prefix
+
+		if (p[0] != 'O' && p[0] != 'o') continue;
+
+		int ex = (p[0] == 'o');
+		if (p[1] == 'X') p++;     // 'OX' variant: range follows at p+1, label still field 1
+
+		substrcpy(field, p, 1);   // field 1 = option label
+		if (strcmp(field, opt_label)) continue;
+
+		// fields 2.. = choices, in status-value order
+		for (int k = 0; substrcpy(field, p, 2 + k); k++)
+		{
+			if (!strcmp(field, choice_text))
+			{
+				user_io_status_set(p + 1, k, ex);
+				return 1;
+			}
+		}
+		return 0;                 // label matched but no such choice
+	}
+	return 0;
+}
+
 int user_io_status_save(const char *filename)
 {
 	return FileSaveConfig(filename, cur_status, sizeof(cur_status));
