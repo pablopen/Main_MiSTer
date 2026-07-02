@@ -132,6 +132,9 @@ void input_switch(int grab);
 int input_state();
 void input_uinp_destroy();
 
+struct input_adapter;
+int input_adapter_connected(const input_adapter *a);
+
 extern char joy_bnames[NUMBUTTONS][32];
 extern int  joy_bcount;
 extern uint8_t ps2_kbd_scan_set;

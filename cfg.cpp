@@ -96,6 +96,7 @@ static const ini_var_t ini_vars[] =
 	{ "SPINNER_PID", (void*)(&(cfg.spinner_pid)), HEX16, 0, 0xFFFF },
 	{ "SPINNER_AXIS", (void*)(&(cfg.spinner_axis)), UINT8, 0, 2 },
 	{ "SPINNER_THROTTLE", (void*)(&(cfg.spinner_throttle)), INT32, -10000, 10000 },
+	{ "MASCON_ENABLE", (void*)(&(cfg.mascon_enable)), UINT8, 0, 1 },
 	{ "AFILTER_DEFAULT", (void*)(&(cfg.afilter_default)), STRING, 0, sizeof(cfg.afilter_default) - 1 },
 	{ "VFILTER_DEFAULT", (void*)(&(cfg.vfilter_default)), STRING, 0, sizeof(cfg.vfilter_default) - 1 },
 	{ "VFILTER_VERTICAL_DEFAULT", (void*)(&(cfg.vfilter_vertical_default)), STRING, 0, sizeof(cfg.vfilter_vertical_default) - 1 },
