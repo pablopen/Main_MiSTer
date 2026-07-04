@@ -1,0 +1,51 @@
+<!-- Zuiki One-Handle MasCon (ZKNS-001 family) as a Densha de GO! train controller.
+     Install: copy to /media/fat/config/inputadapters/
+     Device IDs and encodings from https://github.com/marcriera/train-controller-db -->
+<inputadapter version="1" name="Train Controller" enabled="1">
+	<match vid="33DD" pid="0001"/> <!-- One Handle MasCon for Nintendo Switch -->
+	<match vid="33DD" pid="0002"/> <!-- 1st-anniversary translucent -->
+	<match vid="33DD" pid="0003"/> <!-- red -->
+	<match vid="33DD" pid="0004"/> <!-- blue -->
+	<match vid="33DD" pid="0005"/> <!-- black -->
+	<match vid="0F0D" pid="00C1"/> <!-- Densha de GO! edition -->
+
+	<!-- handle on ABS_Y, raw 0..255; the controller reports exact discrete values per notch -->
+	<positions axis="ABS_Y" tolerance="0" default="n">
+		<pos id="eb" value="0"/>
+		<pos id="b8" value="5"/>
+		<pos id="b7" value="19"/>
+		<pos id="b6" value="32"/>
+		<pos id="b5" value="46"/>
+		<pos id="b4" value="60"/>
+		<pos id="b3" value="73"/>
+		<pos id="b2" value="87"/>
+		<pos id="b1" value="101"/>
+		<pos id="n"  value="128"/>
+		<pos id="p1" value="159"/>
+		<pos id="p2" value="183"/>
+		<pos id="p3" value="206"/>
+		<pos id="p4" value="230"/>
+		<pos id="p5" value="255"/>
+	</positions>
+
+	<!-- PlayStation DDG protocol: identity is UP+DOWN held; a=Triangle, l/r=L1/R1 -->
+	<core name="PSX">
+		<prepare option="Pad1" value="Digital"/>
+		<hold buttons="up down"/>
+		<map pos="eb" buttons="left right"/>
+		<map pos="b8" buttons="left right l2 r"/>
+		<map pos="b7" buttons="left right l l2 r"/>
+		<map pos="b6" buttons="left right r2"/>
+		<map pos="b5" buttons="left right l r2"/>
+		<map pos="b4" buttons="left right l2 r2"/>
+		<map pos="b3" buttons="left right l l2 r2"/>
+		<map pos="b2" buttons="left right r r2"/>
+		<map pos="b1" buttons="left right l r r2"/>
+		<map pos="n"  buttons="left right l2 r r2"/>
+		<map pos="p1" buttons="a right l2 r r2"/>
+		<map pos="p2" buttons="right l2 r r2"/>
+		<map pos="p3" buttons="a left l2 r r2"/>
+		<map pos="p4" buttons="left l2 r r2"/>
+		<map pos="p5" buttons="a l2 r r2"/>
+	</core>
+</inputadapter>

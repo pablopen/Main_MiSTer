@@ -1490,6 +1490,7 @@ typedef struct
 	const input_adapter *adapter;
 	const void *adapter_dev;
 	uint32_t adapter_state;
+	int16_t  adapter_scale[2][2];   // [stick][axis] signed 8.8; 0 = untouched
 
 	int      misc_flags;
 	int      paddle_val;
@@ -2642,8 +2643,18 @@ static void joy_analog(int dev, int axis, int offset, int stick = 0)
 		{
 			// Emulate N64 joystick range and shape for regular -127-+127 controllers
 			n64_joy_emu(x, y, &x, &y, input[dev].max_cardinal[stick], input[dev].max_range[stick]);
-			stick_swap(num, stick, &num, &stick);
 		}
+
+		// adapter axis scale: after n64_joy_emu (which normalizes by observed maxima),
+		// before stick_swap (the scale indexes the physical stick)
+		const int16_t *sc = input[dev].adapter_scale[stick];
+		if ((sc[0] | sc[1]) && input_adapter_active(input[dev].adapter))
+		{
+			if (sc[0]) { x = (x * sc[0]) >> 8; if (x > 127) x = 127; if (x < -128) x = -128; }
+			if (sc[1]) { y = (y * sc[1]) >> 8; if (y > 127) y = 127; if (y < -128) y = -128; }
+		}
+
+		if (is_n64()) stick_swap(num, stick, &num, &stick);
 
 		if (stick)
 		{
@@ -3917,7 +3928,7 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 		case EV_ABS:
 			// before the OSD gate and dedup: the adapter must never miss a raw axis change
 			if (input[dev].adapter && input_adapter_active(input[dev].adapter)
-				&& input[dev].adapter->on_event(input[dev].adapter_dev, ev->type, ev->code & 0xFF, ev->value, &input[dev].adapter_state))
+				&& input[dev].adapter->on_event(input[dev].adapter, input[dev].adapter_dev, ev->type, ev->code & 0xFF, ev->value, &input[dev].adapter_state))
 			{
 				break;
 			}
@@ -5191,6 +5202,7 @@ int input_test(int getchar)
 
 		memset(input, 0, sizeof(input));
 		adapter_devs = 0;
+		input_adapter_init();
 
 		int n = 0;
 		DIR *d = opendir("/dev/input");
@@ -5289,7 +5301,12 @@ int input_test(int getchar)
 						}
 
 						input[n].adapter = input_adapter_match(input[n].vid, input[n].pid, &input[n].adapter_dev);
-					if (input[n].adapter) adapter_dev_idx[adapter_devs++] = n;
+					if (input[n].adapter)
+					{
+						adapter_dev_idx[adapter_devs++] = n;
+						if (input[n].adapter->axis_cfg)
+							input[n].adapter->axis_cfg(input[n].adapter, input[n].adapter_dev, input[n].adapter_scale);
+					}
 
 						if (input[n].vid == 0x054c)
 						{
@@ -5591,7 +5608,7 @@ int input_test(int getchar)
 			for (int k = 0; k < adapter_devs; k++)
 			{
 				const input_adapter *a = input[adapter_dev_idx[k]].adapter;
-				if (input_adapter_active(a) && a->prepare) a->prepare();
+				if (input_adapter_active(a) && a->prepare) a->prepare(a);
 			}
 		}
 		cur_leds |= 0x80;
@@ -6416,7 +6433,7 @@ int input_poll(int getchar)
 				int d = adapter_dev_idx[k];
 				if (input[d].num && input[d].num <= NUMPLAYERS && input_adapter_active(input[d].adapter))
 				{
-					input[d].adapter->apply(input[d].adapter_dev, &input[d].adapter_state, &joy_mask[input[d].num - 1]);
+					input[d].adapter->apply(input[d].adapter, input[d].adapter_dev, &input[d].adapter_state, &joy_mask[input[d].num - 1]);
 				}
 			}
 		}

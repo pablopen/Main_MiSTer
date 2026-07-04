@@ -835,7 +835,7 @@ static const input_adapter *adapter_for_slot(int slot)
 	const input_adapter *const *list = input_adapter_all(&count);
 	for (int i = 0; i < count; i++)
 	{
-		if (!input_adapter_connected(list[i]) || !list[i]->supported()) continue;
+		if (!input_adapter_connected(list[i]) || !list[i]->supported(list[i])) continue;
 		if (!slot--) return list[i];
 	}
 	return NULL;
@@ -865,8 +865,8 @@ static int adapted_controllers_select()
 		const input_adapter *a = adapter_for_slot(slot);
 		if (!a) return 0;
 
-		if (a->enable) *a->enable = !*a->enable;
-		if (a->enable && *a->enable && a->prepare) a->prepare();   // turning on -> configure core
+		if (a->enable) input_adapter_set_enable(a, !*a->enable);
+		if (a->enable && *a->enable && a->prepare) a->prepare(a);   // turning on -> configure core
 		return 1;
 	}
 	return 0;
